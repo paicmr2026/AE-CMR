@@ -727,7 +727,7 @@ if __name__ == '__main__':
     cb = SaveBestModelCallbackVal()
 
     checkpoint = ModelCheckpoint(
-        dirpath="./experiments/results/mnist_red/",
+        dirpath="./experiments/mnist/results/mnist_red/",
         filename=f"best",
         monitor="val_loss",
         mode="min",
