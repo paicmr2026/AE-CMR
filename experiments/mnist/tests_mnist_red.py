@@ -43,7 +43,7 @@ transform = transforms.Compose([
 
 data_root = Path("./data")
 
-checkpoint_path = './results/mnist_red_bias/best_0.3.ckpt'
+checkpoint_path = './experiments/results/mnist_red/best_0.3.ckpt'
 
 def c_idx_to_name(c_idx, num_digits, digit_limit):
 
