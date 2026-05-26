@@ -1,28 +1,3 @@
-"""
-Biased MNIST Addition Dataset
-=============================
-
-This script creates a biased MNIST addition dataset where:
-
-TRAINING:
-    - Any sample whose digit sum == 12 is colored RED
-    - All other samples remain GRAY
-
-TESTING:
-    - Random samples are colored RED regardless of sum
-
-This creates a spurious correlation:
-    RED -> SUM == 12
-
-during training, which disappears during testing.
-
-The script also:
-    - adds RED as an explicit concept
-    - visualizes samples
-    - prints dataset statistics
-    - tests DataLoader output shapes
-"""
-
 from pathlib import Path
 from itertools import product
 from collections import defaultdict
@@ -50,6 +25,20 @@ from autoencoderCMR_red import (
     get_accuracy,
 )
 
+from pathlib import Path
+from itertools import product
+from collections import defaultdict
+
+import torch
+import torchvision
+import matplotlib.pyplot as plt
+
+from torchvision import transforms
+from torchvision.datasets import MNIST
+from torch.utils.data import TensorDataset, DataLoader
+
+from sklearn.metrics import accuracy_score
+
 
 # ============================================================
 # CONFIG
@@ -64,13 +53,16 @@ data_root = Path("./data")
 
 EMB_SIZE     = 500
 RULE_EMB     = 1000
-N_RULES      = 20
+N_RULES      = 21
 
 LR           = 0.0001
 BATCH_SIZE   = 512
 MAX_EPOCHS   = 200
 VAL_SPLIT    = 0.1
 SEED         = 10
+
+TRAIN_PROB = 0.3
+TEST_PROB = 0.3
 
 
 # ============================================================
@@ -123,30 +115,53 @@ def colorize_tensor(images, red_mask):
     return rgb
 
 
-def apply_color_bias(X, y, train=True, test_red_prob=0.5):
+def apply_color_bias(
+    X,
+    y,
+    train=True,
+    train_red_prob=1.0,
+    test_red_prob=0.5
+):
     """
     Apply spurious color bias.
 
     TRAIN:
-        sum == 12 --> RED
+        sum == 12 --> RED with probability train_red_prob
 
     TEST:
-        random RED
+        random RED with probability test_red_prob
     """
 
     N = len(y)
 
     if train:
-        red_mask = (y == 12)
+
+        # Candidates
+        sum12_mask = (y == 12)
+
+        # Random probability mask
+        random_mask = (
+            torch.rand(N) < train_red_prob
+        )
+
+        # Only some SUM=12 become RED
+        red_mask = sum12_mask & random_mask
 
     else:
-        red_mask = torch.rand(N) < test_red_prob
+
+        # Random RED during testing
+        red_mask = (
+            torch.rand(N) < test_red_prob
+        )
 
     X_colored = []
 
     for digit_tensor in X:
 
-        rgb_tensor = colorize_tensor(digit_tensor, red_mask)
+        rgb_tensor = colorize_tensor(
+            digit_tensor,
+            red_mask
+        )
 
         X_colored.append(rgb_tensor)
 
@@ -161,6 +176,7 @@ def addition_dataset_red(
     train,
     num_digits,
     digit_limit=10,
+    train_red_prob=1.0,
     test_red_prob=0.5
 ):
     """
@@ -197,13 +213,16 @@ def addition_dataset_red(
     # CONCEPT VECTORS
     # ========================================================
 
+    # +1 for RED concept
     c = [
-        torch.zeros((len(X[0]), digit_limit)).float()
+        torch.zeros((len(X[0]), digit_limit + 1)).float()
         for _ in range(len(X))
     ]
 
     for i, ys in enumerate(y):
         for j, yi in enumerate(ys):
+
+            # One-hot digit concept
             c[i][j, yi] = 1.0
 
     # ========================================================
@@ -220,16 +239,18 @@ def addition_dataset_red(
         X,
         y,
         train=train,
+        train_red_prob=train_red_prob,
         test_red_prob=test_red_prob
     )
 
     # ========================================================
-    # OPTIONAL: ADD RED AS EXPLICIT CONCEPT
+    # ADD RED CONCEPT TO EACH DIGIT
     # ========================================================
 
-    red_concept = red_mask.float().unsqueeze(1)
+    for i in range(len(c)):
 
-    c.append(red_concept)
+        # Last column = RED concept
+        c[i][:, -1] = red_mask.float()
 
     return X, c, y, red_mask
 
@@ -238,44 +259,73 @@ def addition_dataset_red(
 # LOGIC EXPLANATIONS
 # ============================================================
 
-def create_single_digit_addition(num_digits, digit_limit=10):
+def create_single_digit_addition(
+    num_digits,
+    digit_limit=10
+):
 
     concept_names = [
         "x%d%d" % (i, j)
-        for i, j in product(range(num_digits), range(digit_limit))
+        for i, j in product(
+            range(num_digits),
+            range(digit_limit)
+        )
     ]
 
-    concept_names.append("RED")
+    # Add RED concept per digit
+    concept_names.extend([
+        f"x{i}RED"
+        for i in range(num_digits)
+    ])
 
     sums = defaultdict(list)
 
-    for d in product(*[range(digit_limit) for _ in range(num_digits)]):
+    for d in product(
+        *[range(digit_limit)
+          for _ in range(num_digits)]
+    ):
 
         conj = []
         z = 0
 
         for i, n in enumerate(d):
-            conj.append("x%d%d" % (i, n))
+
+            conj.append(
+                "x%d%d" % (i, n)
+            )
+
             z += n
 
-        sums[z].append("(" + " & ".join(conj) + ")")
+        sums[z].append(
+            "(" + " & ".join(conj) + ")"
+        )
 
     explanations = {}
 
     class_names = [
         "z%d" % z
-        for z in range(digit_limit * num_digits - num_digits + 1)
+        for z in range(
+            digit_limit * num_digits
+            - num_digits + 1
+        )
     ]
 
-    for z in range(digit_limit * num_digits - num_digits + 1):
+    for z in range(
+        digit_limit * num_digits
+        - num_digits + 1
+    ):
 
         explanations["z%d" % z] = {
             "name": "%d" % z,
-            "explanation": "(" + " | ".join(sums[z]) + ")"
+            "explanation":
+                "(" + " | ".join(sums[z]) + ")"
         }
 
-    return concept_names, class_names, explanations
-
+    return (
+        concept_names,
+        class_names,
+        explanations
+    )
 
 # ============================================================
 # VISUALIZATION
@@ -363,7 +413,7 @@ def print_statistics(y, red_mask):
 
 
 # ============================================================
-# CONCEPT NAME HELPER
+# MAIN
 # ============================================================
 
 def c_idx_to_name(c_idx, num_digits, digit_limit):
@@ -379,9 +429,8 @@ def c_idx_to_name(c_idx, num_digits, digit_limit):
 
     return "RED"
 
-if __name__ == '__main__':
 
-    pl.seed_everything(SEED)
+if __name__ == '__main__':
 
     number_digits = 2
 
@@ -391,7 +440,7 @@ if __name__ == '__main__':
         create_single_digit_addition(number_digits)
 
     print("Example concepts:")
-    print(concept_names[:10])
+    print(concept_names)
     print("...")
     print("Last concept:", concept_names[-1])
 
@@ -402,9 +451,10 @@ if __name__ == '__main__':
     print("\nCreating TRAIN dataset...")
 
     X_train, c_train, y_train, red_train = addition_dataset_red(
-        train=True,
-        num_digits=number_digits,
-        test_red_prob=0.5
+    train=True,
+    num_digits=number_digits,
+    train_red_prob=TRAIN_PROB,
+    test_red_prob=TEST_PROB
     )
 
     print_statistics(y_train, red_train)
@@ -416,9 +466,10 @@ if __name__ == '__main__':
     print("\nCreating TEST dataset...")
 
     X_test, c_test, y_test, red_test = addition_dataset_red(
-        train=False,
-        num_digits=number_digits,
-        test_red_prob=0.5
+    train=False,
+    num_digits=number_digits,
+    train_red_prob=TRAIN_PROB,
+    test_red_prob=TEST_PROB
     )
 
     print_statistics(y_test, red_test)
@@ -475,6 +526,69 @@ if __name__ == '__main__':
         print(y_batch[:10])
 
         break
+
+    # ========================================================
+    # TEST CONCEPT STRUCTURE
+    # ========================================================
+
+    print("\nTesting concept tensors...\n")
+
+    for digit_idx, concept_tensor in enumerate(c_train):
+
+        print(f"Digit {digit_idx}")
+        print("Shape:", concept_tensor.shape)
+
+        # Expected shape: (N, digit_limit + 1)
+        assert concept_tensor.shape[1] == 11, \
+            "Expected 10 digit concepts + 1 red concept"
+
+    # ----------------------------------------------------
+    # Check one-hot encoding
+    # ----------------------------------------------------
+
+    digit_part = concept_tensor[:, :-1]
+
+    one_hot_sums = digit_part.sum(dim=1)
+
+    assert torch.all(one_hot_sums == 1), \
+        "Digit concepts are not valid one-hot vectors"
+
+    print("✓ One-hot encoding correct")
+
+    # ----------------------------------------------------
+    # Check red concept
+    # ----------------------------------------------------
+
+    red_column = concept_tensor[:, -1]
+
+    assert torch.all(red_column == red_train.float()), \
+        "Red concept column does not match red_mask"
+
+    print("✓ Red concept matches red_mask")
+
+    # ----------------------------------------------------
+    # Show examples
+    # ----------------------------------------------------
+
+    print("\nExample concept vectors:")
+
+    for i in range(30):
+
+        digit_class = torch.argmax(
+            concept_tensor[i, :-1]
+        ).item()
+
+        is_red = bool(concept_tensor[i, -1].item())
+
+        print(
+            f"Sample {i}: "
+            f"digit={digit_class}, "
+            f"red={is_red}"
+        )
+
+        print(concept_tensor[i])
+
+    print("\n" + "-" * 50)
 
     print("\nDONE!")
 
@@ -568,7 +682,7 @@ if __name__ == '__main__':
 
         encoder=MNISTEncoder(
             emb_size=EMB_SIZE,
-            cp_output=10,
+            cp_output=11,
             number_digits=number_digits
         ),
 
@@ -614,7 +728,7 @@ if __name__ == '__main__':
 
     checkpoint = ModelCheckpoint(
         dirpath="./results/mnist_red_bias/",
-        filename="best",
+        filename=f"best_{TRAIN_PROB}_{TEST_PROB}_final",
         monitor="val_loss",
         mode="min",
         save_top_k=1,
@@ -675,3 +789,34 @@ if __name__ == '__main__':
         print(f"Task {task}:")
         print(task_to_rules[task])
         print()
+
+    print("Train accuracy; ", get_accuracy(model, train_loader))
+    print("Test accuracy: ", get_accuracy(model, test_loader))
+
+    @torch.no_grad()
+    def eval_task(task_id):
+            model.eval()
+
+            preds_list = []
+            y_list = []
+
+            with torch.no_grad():
+                for x, c, y in test_loader:
+                    y_pred = model.predict((x, c, y))
+
+                    preds_task = y_pred[:, task_id]
+                    y_task = y[:, task_id]
+
+                    preds_list.append(preds_task.cpu())
+                    y_list.append(y_task.cpu())
+
+            preds = torch.cat(preds_list, dim=0).numpy()
+            ys = torch.cat(y_list, dim=0).numpy()
+
+            return accuracy_score(ys, preds)
+    
+    with torch.no_grad():
+        for i in range(n_tasks):
+            print(f"Task {i} accuracy: ", eval_task(i))
+
+    

@@ -171,7 +171,6 @@ class RuleModule(torch.nn.Module):
         raise NotImplementedError
 
     def calc_y(self, c, pospolarity, relevance):
-        print("c :", c.shape)
         return reasoning(self.logic, c, pospolarity, relevance)
 
     def calc_c_rec(self, pospolarity, relevance):
@@ -277,7 +276,6 @@ class MNISTEncoder(torch.nn.Module):
             embeddings.append(emb)
         # c_probs: list of (b, n) of length m to (b, m*n), same for emb
         c_probs = torch.cat(classes, dim=-1)
-        print("c probs: ", c_probs.shape)
         emb = torch.cat(embeddings, dim=-1)
         emb = self.tuple_embedder(emb)
         return c_probs, emb
@@ -634,7 +632,6 @@ class MNISTModel(pl.LightningModule):
     def forward(self, x):
         batch_x, batch_c, batch_y = x
         batch_size = batch_c.shape[0]
-        print("batch c :", batch_c.shape)
 
         # === concept prediction ===
         c_embs = None
@@ -665,7 +662,6 @@ class MNISTModel(pl.LightningModule):
         batch_c = batch_c.unsqueeze(1).unsqueeze(1).repeat(1, self.n_tasks, effective_n_rules, 1)
         _pospolarity = pospolarity.unsqueeze(0).repeat(batch_size, 1, 1, 1)
         _relevance = relevance.unsqueeze(0).repeat(batch_size, 1, 1, 1)
-        print("batch c again :", batch_c.shape)
 
         p_c_rec = self.rule_module.calc_c_rec(_pospolarity, _relevance)
         if self.training and not self.c_pred_in_logic:
@@ -675,7 +671,6 @@ class MNISTModel(pl.LightningModule):
             c_pred = c_intv
         else:  # use thresholded c_pred for y_pred
             c = (c_pred.detach() > 0.5).float().unsqueeze(1).unsqueeze(1).repeat(1, self.n_tasks, effective_n_rules, 1)
-            print("c again: ", c.shape)
             y_per_rule = self.rule_module.calc_y(c, _pospolarity, _relevance)
 
         return log_p_s, p_c_rec, y_per_rule, c_pred, p_s, entr, y_to_mask
